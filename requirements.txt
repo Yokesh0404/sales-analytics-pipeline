@@ -1,0 +1,8 @@
+# Python packages for the local pipeline.
+# Exact versions are pinned so the project installs the same way on any machine.
+# More packages (dbt, streamlit, plotly) are added in later stages.
+
+pandas==2.2.3            # read CSVs and work with tables in Python
+SQLAlchemy==2.0.36       # connect Python to PostgreSQL in a database-agnostic way
+psycopg2-binary==2.9.10  # the PostgreSQL driver SQLAlchemy uses under the hood
+python-dotenv==1.0.1     # load DB credentials from the .env file

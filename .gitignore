@@ -1,0 +1,24 @@
+# --- Secrets: never commit real credentials ---
+.env
+.streamlit/secrets.toml
+
+# --- Python ---
+.venv/
+__pycache__/
+*.pyc
+
+# --- Data: the Olist CSVs are large and come from Kaggle, so we don't commit them ---
+data/raw/*
+!data/raw/.gitkeep
+
+# --- Logs written by our scripts ---
+logs/
+
+# --- dbt build output (added in stage 4) ---
+target/
+dbt_packages/
+
+# --- Editor / OS files ---
+.vscode/
+.DS_Store
+Thumbs.db
