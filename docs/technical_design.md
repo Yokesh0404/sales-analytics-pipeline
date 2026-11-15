@@ -134,8 +134,10 @@ sales_analytics_pipeline/
 | Git repository initialized, Stage 1 committed (`910bb5c`) | ✅ Done |
 | `olist` database created in PostgreSQL | ⏳ Pending (user) |
 | Real password set in `.env` | ⏳ Pending (user) |
-| Connection test passes | ⏳ Pending |
+| Connection test passes | ❌ Failing: `.env` still has the placeholder password (PostgreSQL 18 service is running) |
 | Olist CSVs placed in `data/raw/` | ⏳ Pending (user) |
+
+**Blocking Stage 2:** set the real password in `.env`, create the `olist` database, and add the 9 Olist CSVs to `data/raw/`.
 
 ---
 
