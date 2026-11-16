@@ -1,0 +1,27 @@
+version: 2
+
+# "Sources" tell dbt about tables it did NOT build: the raw tables loaded by src/ingest.py.
+# Models read them with {{ source('raw', 'orders') }}, which also draws them in the lineage graph.
+sources:
+  - name: raw
+    schema: raw
+    description: "Untouched copies of the Olist CSVs, loaded by src/ingest.py. Every column is text."
+    tables:
+      - name: customers
+        description: "One row per order's customer record (olist_customers_dataset.csv)."
+      - name: geolocation
+        description: "Zip code prefixes with latitude/longitude. Contains many exact duplicates."
+      - name: order_items
+        description: "One row per item in an order."
+      - name: order_payments
+        description: "One row per payment method used on an order."
+      - name: order_reviews
+        description: "Customer reviews. One review_id can cover several orders."
+      - name: orders
+        description: "One row per order with status and lifecycle timestamps."
+      - name: products
+        description: "Product catalog. Category is in Portuguese."
+      - name: sellers
+        description: "One row per seller."
+      - name: product_category_name_translation
+        description: "Portuguese to English category names."

@@ -1,0 +1,16 @@
+# How dbt connects to PostgreSQL.
+# Every value comes from an environment variable via env_var(), so no
+# password is written here. Locally, src/run_dbt.py loads them from .env;
+# in Airflow (stage 5) Docker passes them in.
+olist_dbt:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('POSTGRES_HOST', 'localhost') }}"
+      port: "{{ env_var('POSTGRES_PORT', '5432') | int }}"
+      user: "{{ env_var('POSTGRES_USER') }}"
+      password: "{{ env_var('POSTGRES_PASSWORD') }}"
+      dbname: "{{ env_var('POSTGRES_DB') }}"
+      schema: analytics   # default schema; staging/marts override it in dbt_project.yml
+      threads: 4          # build up to 4 models at the same time

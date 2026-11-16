@@ -1,0 +1,133 @@
+version: 2
+
+# Descriptions appear in `dbt docs`. data_tests run with `dbt test`.
+models:
+  - name: stg_customers
+    description: "Cleaned customers. One row per customer_id (Olist issues a new customer_id per order)."
+    columns:
+      - name: customer_id
+        description: "Primary key. Customer record for one order."
+        data_tests: [unique, not_null]
+      - name: customer_unique_id
+        description: "The real person. Use this to find repeat customers."
+        data_tests: [not_null]
+      - name: state
+        description: "Two-letter Brazilian state code, upper case."
+
+  - name: stg_geolocation
+    description: "Zip code prefix coordinates with exact duplicates removed. No unique key: one prefix can have several coordinates."
+    columns:
+      - name: zip_code_prefix
+        description: "First 5 digits of the zip code, text to keep leading zeros."
+        data_tests: [not_null]
+
+  - name: stg_order_items
+    description: "Cleaned order items. One row per item in an order."
+    columns:
+      - name: order_item_key
+        description: "Primary key: order_id + '-' + order_item_id."
+        data_tests: [unique, not_null]
+      - name: order_id
+        description: "The order this item belongs to."
+        data_tests: [not_null]
+      - name: product_id
+        description: "The product sold."
+        data_tests: [not_null]
+      - name: seller_id
+        description: "The seller who sold it."
+        data_tests: [not_null]
+      - name: price
+        description: "Item price in BRL, excluding freight."
+      - name: freight_value
+        description: "Freight charged for this item in BRL."
+
+  - name: stg_order_payments
+    description: "Cleaned payments. One row per payment method used on an order."
+    columns:
+      - name: payment_key
+        description: "Primary key: order_id + '-' + payment_sequential."
+        data_tests: [unique, not_null]
+      - name: order_id
+        description: "The order that was paid."
+        data_tests: [not_null]
+      - name: payment_type
+        description: "credit_card, boleto, voucher, debit_card or not_defined."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["credit_card", "boleto", "voucher", "debit_card", "not_defined"]
+      - name: payment_value
+        description: "Amount paid with this method in BRL."
+
+  - name: stg_order_reviews
+    description: "Cleaned reviews. One review_id can cover several orders, so the key is review_id + order_id."
+    columns:
+      - name: review_key
+        description: "Primary key: review_id + '-' + order_id."
+        data_tests: [unique, not_null]
+      - name: review_id
+        description: "Review identifier (NOT unique on its own)."
+      - name: order_id
+        description: "The reviewed order."
+        data_tests: [not_null]
+      - name: review_score
+        description: "1 (worst) to 5 (best)."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [1, 2, 3, 4, 5]
+                quote: false
+
+  - name: stg_orders
+    description: "Cleaned orders with typed timestamps. One row per order."
+    columns:
+      - name: order_id
+        description: "Primary key."
+        data_tests: [unique, not_null]
+      - name: customer_id
+        description: "Customer record for this order."
+        data_tests: [not_null]
+      - name: order_status
+        description: "Lifecycle status, lower case."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["created", "approved", "invoiced", "processing", "shipped", "delivered", "canceled", "unavailable"]
+      - name: purchased_at
+        description: "When the customer placed the order."
+        data_tests: [not_null]
+      - name: delivered_to_customer_at
+        description: "When the customer received the order. NULL if not delivered."
+      - name: estimated_delivery_at
+        description: "Delivery date promised to the customer at purchase."
+
+  - name: stg_product_category_name_translation
+    description: "Portuguese to English category names."
+    columns:
+      - name: category_name_pt
+        description: "Primary key. Portuguese category name."
+        data_tests: [unique, not_null]
+      - name: category_name_en
+        description: "English category name."
+
+  - name: stg_products
+    description: "Cleaned products with English category. Missing categories become 'unknown'; 2 untranslated categories are translated by hand."
+    columns:
+      - name: product_id
+        description: "Primary key."
+        data_tests: [unique, not_null]
+      - name: category_name
+        description: "English category name, or 'unknown'."
+        data_tests: [not_null]
+      - name: category_name_pt
+        description: "Original Portuguese category name, or 'unknown'."
+
+  - name: stg_sellers
+    description: "Cleaned sellers. One row per seller."
+    columns:
+      - name: seller_id
+        description: "Primary key."
+        data_tests: [unique, not_null]
+      - name: state
+        description: "Two-letter Brazilian state code, upper case."

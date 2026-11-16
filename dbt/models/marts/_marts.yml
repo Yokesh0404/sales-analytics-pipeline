@@ -1,0 +1,158 @@
+version: 2
+
+models:
+  # ---------------- Facts ----------------
+  - name: fct_orders
+    description: "Fact table. Grain: one row per order. Order totals, status, delivery performance and the latest review score."
+    columns:
+      - name: order_id
+        description: "Primary key."
+        data_tests: [unique, not_null]
+      - name: customer_id
+        description: "Foreign key to dim_customers."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_customers')
+                field: customer_id
+      - name: date_key
+        description: "Purchase date as YYYYMMDD. Foreign key to dim_date."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: order_status
+        description: "Lifecycle status of the order."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["created", "approved", "invoiced", "processing", "shipped", "delivered", "canceled", "unavailable"]
+      - name: item_count
+        description: "Number of items in the order (0 for orders without items)."
+      - name: order_total
+        description: "Sum of item prices + freight in BRL."
+      - name: payment_total
+        description: "Total paid across all payment methods in BRL. Can differ from order_total (installment interest, vouchers)."
+      - name: delivery_days
+        description: "Days from purchase to delivery. NULL if not delivered."
+      - name: is_late
+        description: "True if delivered after the estimated date. NULL if not delivered."
+      - name: review_score
+        description: "Score (1-5) of the most recent review. NULL if no review."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [1, 2, 3, 4, 5]
+                quote: false
+
+  - name: fct_order_items
+    description: "Fact table. Grain: one row per order item. Use for revenue by product, category and seller."
+    columns:
+      - name: order_item_key
+        description: "Primary key: order_id + '-' + order_item_id."
+        data_tests: [unique, not_null]
+      - name: order_id
+        description: "Foreign key to fct_orders."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('fct_orders')
+                field: order_id
+      - name: product_id
+        description: "Foreign key to dim_products."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_products')
+                field: product_id
+      - name: seller_id
+        description: "Foreign key to dim_sellers."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_sellers')
+                field: seller_id
+      - name: customer_id
+        description: "Foreign key to dim_customers."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_customers')
+                field: customer_id
+      - name: date_key
+        description: "Purchase date as YYYYMMDD. Foreign key to dim_date."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: order_status
+        description: "Status of the parent order."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["created", "approved", "invoiced", "processing", "shipped", "delivered", "canceled", "unavailable"]
+      - name: price
+        description: "Item price in BRL."
+        data_tests: [not_null]
+      - name: freight_value
+        description: "Freight for this item in BRL."
+      - name: payment_value_share
+        description: "This item's share of the order's payment, split by item value."
+      - name: delivery_days
+        description: "Days from purchase to delivery of the parent order."
+      - name: is_late
+        description: "True if the parent order was delivered late."
+
+  # ---------------- Dimensions ----------------
+  - name: dim_customers
+    description: "Dimension. One row per customer_id, with location."
+    columns:
+      - name: customer_id
+        description: "Primary key."
+        data_tests: [unique, not_null]
+      - name: customer_unique_id
+        description: "The real person across orders. Use for repeat-customer analysis."
+        data_tests: [not_null]
+      - name: state
+        description: "Customer's state (two-letter code)."
+
+  - name: dim_products
+    description: "Dimension. One row per product, with English category."
+    columns:
+      - name: product_id
+        description: "Primary key."
+        data_tests: [unique, not_null]
+      - name: category_name
+        description: "English category name, or 'unknown'."
+        data_tests: [not_null]
+
+  - name: dim_sellers
+    description: "Dimension. One row per seller, with location."
+    columns:
+      - name: seller_id
+        description: "Primary key."
+        data_tests: [unique, not_null]
+      - name: state
+        description: "Seller's state (two-letter code)."
+
+  - name: dim_date
+    description: "Dimension. One row per calendar day covering the full order date range."
+    columns:
+      - name: date_key
+        description: "Primary key, YYYYMMDD integer."
+        data_tests: [unique, not_null]
+      - name: date_day
+        description: "The calendar date."
+        data_tests: [unique, not_null]
+      - name: month_start
+        description: "First day of the month, for monthly grouping."

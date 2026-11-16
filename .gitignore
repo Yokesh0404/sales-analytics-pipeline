@@ -14,9 +14,11 @@ data/raw/*
 # --- Logs written by our scripts ---
 logs/
 
-# --- dbt build output (added in stage 4) ---
-target/
-dbt_packages/
+# --- dbt build output and logs ---
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+dbt/.user.yml
 
 # --- Editor / OS files ---
 .vscode/

@@ -1,0 +1,26 @@
+# dbt project settings. dbt reads this file first.
+name: olist_dbt
+version: "1.0.0"
+config-version: 2
+
+# Which connection profile (in profiles.yml) to use.
+profile: olist_dbt
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+clean-targets: ["target", "dbt_packages"]   # folders removed by `dbt clean`
+
+flags:
+  send_anonymous_usage_stats: false   # don't send usage data to dbt Labs
+
+# Default settings per folder of models.
+models:
+  olist_dbt:
+    staging:
+      +schema: staging        # build into the "staging" schema
+      # Tables, not views: a view depends on the raw table, and PostgreSQL won't
+      # let ingest.py drop and reload a raw table while a view depends on it.
+      +materialized: table
+    marts:
+      +schema: analytics      # build into the "analytics" schema
+      +materialized: table    # tables are fast for the dashboard to read
