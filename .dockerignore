@@ -1,5 +1,5 @@
-# The Airflow image only needs requirements.txt from the project.
+# The Airflow image only needs the pipeline's requirements file.
 # Ignoring everything else keeps .env, .venv and the data out of the image
 # and makes builds fast.
 *
-!requirements.txt
+!requirements-pipeline.txt

@@ -7,6 +7,7 @@ Runs the whole pipeline once a day, in order:
 2. **quality_checks**: check the raw data; stop if anything is broken
 3. **dbt_run**: build the `staging` and `analytics` (star schema) tables
 4. **dbt_test**: test the built tables
+5. **export_snapshot**: refresh the dashboard's Parquet snapshot (`dashboard/data/`)
 
 If a step fails, the steps after it don't run.
 """
@@ -83,5 +84,16 @@ with DAG(
         """,
     )
 
+    export_snapshot = BashOperator(
+        task_id="export_snapshot",
+        bash_command=f"cd {PROJECT_DIR} && {PYTHON} src/export_snapshot.py",
+        doc_md="""
+        Exports the dashboard's aggregated KPI tables to Parquet files in `dashboard/data/`
+        (about 1 MB, no customer-level data). Runs only after dbt_test passes, so the
+        snapshot never contains untested data. Commit and push the files to update
+        the cloud dashboard.
+        """,
+    )
+
     # ">>" sets the order: each task runs only after the previous one succeeds.
-    ingest_raw >> quality_checks >> dbt_run >> dbt_test
+    ingest_raw >> quality_checks >> dbt_run >> dbt_test >> export_snapshot

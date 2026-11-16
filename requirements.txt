@@ -1,18 +1,11 @@
-# Python packages for the local pipeline.
-# Exact versions are pinned so the project installs the same way on any machine.
-# The dashboard alone (for Streamlit Cloud) uses the smaller dashboard/requirements.txt.
+# Everything for local development: the pipeline + the dashboard.
+#   pip install -r requirements.txt
+#
+# requirements-pipeline.txt -> also used by the Airflow image (no dashboard packages)
+# dashboard/requirements.txt -> used by Streamlit Cloud (no pipeline packages)
 
-pandas==2.2.3            # read CSVs and work with tables in Python
-SQLAlchemy==2.0.36       # connect Python to PostgreSQL in a database-agnostic way
-psycopg2-binary==2.9.10  # the PostgreSQL driver SQLAlchemy uses under the hood
-python-dotenv==1.2.4     # load DB credentials from the .env file (dbt 1.12 needs >= 1.2)
+-r requirements-pipeline.txt
 
-# Stage 4: transformation
-dbt-core==1.12.7         # SQL models, tests and docs
-dbt-postgres==1.11.0     # lets dbt talk to PostgreSQL
-dbt-adapters==1.24.5     # shared adapter code dbt-postgres depends on (pinned for repeatable installs)
-
-# Stage 7: dashboard
+# Dashboard
 streamlit==1.67.0        # the web app framework
 plotly==7.1.0            # interactive charts
-pyarrow==26.0.1          # read/write Parquet files (snapshot mode)

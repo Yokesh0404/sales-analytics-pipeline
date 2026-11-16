@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | In progress (Stages 1–7 of 8 complete) |
+| **Status** | Stages 1–8 complete. Live dashboard link pending deployment. |
 | **Last updated** | 2026-11-16 |
 | **Author** | Yokesh |
 
@@ -38,7 +38,7 @@ Build a reproducible, end-to-end analytics pipeline that:
 ### 1.4 Constraints
 
 - Runs on a single Windows 11 laptop: Python 3.12, PostgreSQL, Docker Desktop.
-- The repository stays **local only**: commits are made, but nothing is pushed to GitHub.
+- The repository was **local only** until Stage 8, when it was pushed to a public GitHub repo (github.com/Yokesh0404/sales-analytics-pipeline) to deploy the dashboard.
 - No credentials in code. All secrets come from environment variables loaded from `.env`.
 - The code must be simple and commented well enough to explain line by line in an interview.
 
@@ -59,7 +59,7 @@ flowchart LR
 
     subgraph Airflow["Airflow (Docker) — daily DAG"]
         direction LR
-        T1[ingest] --> T2[quality_checks] --> T3[dbt_run] --> T4[dbt_test]
+        T1[ingest] --> T2[quality_checks] --> T3[dbt_run] --> T4[dbt_test] --> T5[export_snapshot]
     end
 ```
 
@@ -90,7 +90,7 @@ Keeping raw data untouched means a mistake in a transformation can always be fix
 
 ---
 
-## 3. What is built so far (Stages 1–7)
+## 3. What is built (Stages 1–8)
 
 ### 3.1 Repository layout
 
@@ -99,9 +99,11 @@ sales_analytics_pipeline/
 ├── .env.example          # template for DB + Airflow credentials (committed)
 ├── .env                  # real credentials (git-ignored)
 ├── .gitignore
-├── .dockerignore         # only requirements.txt goes into the Docker build
-├── README.md
-├── requirements.txt      # pinned Python dependencies (laptop AND Airflow image)
+├── .dockerignore         # only requirements-pipeline.txt goes into the Docker build
+├── LICENSE               # MIT (code); the data is CC BY-NC-SA 4.0
+├── README.md             # recruiter-facing overview
+├── requirements.txt      # laptop: includes requirements-pipeline.txt + dashboard packages
+├── requirements-pipeline.txt  # pipeline only (pinned); also installed in the Airflow image
 ├── airflow/
 │   ├── Dockerfile        # official Airflow image + separate venv for the pipeline
 │   ├── docker-compose.yaml  # metadata Postgres, init, api-server, scheduler, dag-processor
@@ -156,7 +158,10 @@ sales_analytics_pipeline/
 
 **Dependency management**
 - A project-local virtual environment in `.venv/`.
-- `requirements.txt` pins exact versions: pandas 2.2.3, SQLAlchemy 2.0.36, psycopg2-binary 2.9.10, python-dotenv 1.2.4, dbt-core 1.12.7, dbt-postgres 1.11.0, dbt-adapters 1.24.5.
+- Three pinned requirement files, one per audience (split in Stage 8):
+  - `requirements-pipeline.txt`: pandas 2.2.3, SQLAlchemy 2.0.36, psycopg2-binary 2.9.10, python-dotenv 1.2.4, pyarrow 26.0.1, dbt-core 1.12.7, dbt-postgres 1.11.0, dbt-adapters 1.24.5. Used by the laptop and the Airflow image.
+  - `requirements.txt`: `-r requirements-pipeline.txt` plus streamlit 1.67.0 and plotly 7.1.0. Used by the laptop.
+  - `dashboard/requirements.txt`: dashboard only. Used by Streamlit Cloud.
 - The same file is installed into the Airflow image, so the laptop and Docker run identical versions. Building the image caught a stale pin: python-dotenv was still pinned at 1.0.1 after the Stage 4 dbt upgrade, which needs 1.2 or newer. It's fixed now.
 
 **Secrets handling**
@@ -357,7 +362,7 @@ flowchart LR
 - **Mounts:** `src/` and `data/` (read-only), `dbt/` (writable, for `target/` and logs), `logs/`, and `airflow/dags`, `airflow/logs`. Code changes on the laptop are picked up without rebuilding the image.
 - **Secrets:** all values come from `.env` through `docker compose --env-file ../.env`. That covers the olist DB credentials, the Airflow admin login, the metadata-DB password, the Fernet key and the JWT secret. `${VAR:?message}` makes Compose stop with a clear error if one is missing. The compose file contains no secrets.
 - **Reaching the laptop's PostgreSQL:** the containers set `POSTGRES_HOST=host.docker.internal`, which overrides `localhost` from `.env`, because `load_dotenv()` never overwrites variables that are already set. Tested before building: Docker Desktop forwards the traffic so it arrives from `127.0.0.1`, which the default `pg_hba.conf` already allows. **No `pg_hba.conf` or `listen_addresses` change was needed.** This resolves risk #2.
-- **DAG `olist_pipeline`** (`airflow/dags/olist_pipeline.py`): `@daily`, `catchup=False`, `max_active_runs=1`, `retries=2` with a 2-minute delay, and a 30-minute timeout per task. Four `BashOperator` tasks: `ingest_raw >> quality_checks >> dbt_run >> dbt_test`. A non-zero exit code fails the task, and the tasks after it don't run. Each task has `doc_md` describing it in the UI.
+- **DAG `olist_pipeline`** (`airflow/dags/olist_pipeline.py`): `@daily`, `catchup=False`, `max_active_runs=1`, `retries=2` with a 2-minute delay, and a 30-minute timeout per task. Five `BashOperator` tasks: `ingest_raw >> quality_checks >> dbt_run >> dbt_test >> export_snapshot`. The 5th task was added in Stage 8; it writes the Parquet snapshot to `dashboard/data/` through a bind mount, and only after `dbt_test` passes. A non-zero exit code fails the task, and the tasks after it don't run. Each task has `doc_md` describing it in the UI.
 - **Airflow 3 scheduling note:** `@daily` runs at the *start* of each day (Airflow 2 ran it at the end). Unpausing the DAG therefore started today's scheduled run straight away, before the manual trigger.
 
 **Airflow runs (2026-11-16): 2 of 2 succeeded, 8 of 8 tasks on the first try**
@@ -367,7 +372,9 @@ flowchart LR
 | `scheduled__2026-11-16T00:00` (started when unpaused) | ✅ 234 s | ✅ 21 s | ✅ 96 s | ✅ 34 s | SUCCESS |
 | `manual__2026-11-16T09:50` (triggered through the REST API) | ✅ 205 s | ✅ 17 s | ✅ 48 s | ✅ 41 s | SUCCESS |
 
-Task logs from the manual run: *"Ingestion finished successfully: 9 tables loaded"*, *"Summary: 46 PASS, 4 WARN, 0 FAIL"*, dbt run *"PASS=15"*, dbt test *"PASS=65"*. `raw.orders._loaded_at` and `quality.check_results` confirm the container run wrote to the laptop's database. Next scheduled run: 2026-11-17 00:00 UTC (only while Docker Desktop is running).
+**5-task run after Stage 8 (`manual__2026-11-16T11:39`): SUCCESS on the first try.** ingest_raw 241 s · quality_checks 16 s · dbt_run 76 s · dbt_test 35 s · export_snapshot 8 s, about 6.3 minutes in total. The export wrote 5 tables (1,001 KB) to the laptop's `dashboard/data/`.
+
+Task logs from the first manual run: *"Ingestion finished successfully: 9 tables loaded"*, *"Summary: 46 PASS, 4 WARN, 0 FAIL"*, dbt run *"PASS=15"*, dbt test *"PASS=65"*. `raw.orders._loaded_at` and `quality.check_results` confirm the container run wrote to the laptop's database. Next scheduled run: 2026-11-17 00:00 UTC (only while Docker Desktop is running).
 
 #### Airflow concepts (interview version)
 
@@ -492,13 +499,20 @@ Run it: `streamlit run dashboard/app.py` → http://localhost:8501. After each `
 | Works in db mode, snapshot mode, and auto-fallback when the DB is unreachable | ✅ Verified |
 | Filtered numbers match SQL on the fact tables | ✅ Verified |
 | Screenshots in `docs/images/` | ✅ Done |
-| Stage 8: README + GitHub push + Streamlit Cloud deployment | ⏳ Next |
+| Requirements split: `requirements-pipeline.txt` (Airflow image, no Streamlit) + `requirements.txt` (laptop) | ✅ Done |
+| `export_snapshot` added as the DAG's 5th task; image rebuilt with pyarrow; 5/5 tasks succeeded | ✅ Verified |
+| README (badges, architecture, insights, testing, how to run, what I learned, future work) + MIT LICENSE | ✅ Done |
+| Interview prep (60-second pitch + 10 questions) | ✅ Done, kept private outside the repo |
+| Pre-push safety: `.env`, raw CSVs, logs, `dbt/target`, `airflow/logs` not tracked; full-history secret scan clean | ✅ Verified |
+| Cloud simulation: fresh clone, no `.env`, `dashboard/requirements.txt` only → snapshot mode, all pages OK | ✅ Verified |
+| Pushed to GitHub (github.com/Yokesh0404/sales-analytics-pipeline) | ✅ Done (Stage 8 docs commit waiting for the author's OK) |
+| Streamlit Cloud deployment + live link in README | ⏳ Waiting for the author to deploy |
 
 ---
 
-## 4. Planned design (Stage 8)
+## 4. Original plan per stage
 
-> Sections 4.1–4.6 describe the original plan for stages already built. Section 3 has what was actually built. Section 4.7 is still a plan and may change.
+> All stages are now built. These sections keep the original plan for reference; section 3 has what was actually built and where it differs.
 
 ### 4.1 Stage 2: Ingestion (`src/ingest.py`) (built)
 
@@ -564,9 +578,9 @@ Built with 3 pages (Overview / Products & Sellers / Customers & Delivery) and tw
   1. Run the dashboard locally only (`streamlit run`). This is the default.
   2. Make an exception and push to GitHub for deployment, with the marts exported to a small file (Parquet/CSV) or a free hosted Postgres (Neon or Supabase).
 
-### 4.7 Stage 8: README
+### 4.7 Stage 8: README, deployment and interview prep (built)
 
-Problem statement, architecture diagram (Mermaid), tech stack, setup and run instructions, key insights from the data, and dashboard screenshots.
+Built as planned, plus an MIT LICENSE, private interview notes (kept outside the repo), and the `export_snapshot` DAG task. The original plan: problem statement, architecture diagram (Mermaid), tech stack, setup and run instructions, key insights from the data, and dashboard screenshots.
 
 ---
 
@@ -595,6 +609,8 @@ Problem statement, architecture diagram (Mermaid), tech stack, setup and run ins
 | 8 | Laptop has 5.9 GB RAM (about 3 GB for Docker). The first image builds crashed Docker Desktop's storage under memory pressure | Lean compose (no Celery/Redis/triggerer); close other apps before `docker compose up`; stop Airflow when not needed (`docker compose down`) |
 | 9 | Health checks use the Airflow CLI, which is slow on this laptop. With a 10-second timeout, healthy services were reported unhealthy | Timeout raised to 60 seconds |
 | 10 | The DAG only runs while Docker Desktop is running | Acceptable for a local portfolio project; a cloud scheduler would be needed for a true daily run |
-| 11 | The snapshot is only as fresh as the last `export_snapshot.py` run; the Airflow DAG doesn't export it yet | Run the export after `dbt run`. Could be added as a 5th DAG task (needs an image rebuild, since the current image has no pyarrow) |
-| 12 | The root `requirements.txt` now includes Streamlit/Plotly, so the next Airflow image rebuild gets bigger | Fine for now; could split into `requirements-pipeline.txt` if the image size matters |
+| 11 | ~~The snapshot is only as fresh as the last export; the DAG didn't export it~~ | ✅ **Resolved in Stage 8:** `export_snapshot` is the DAG's 5th task. The **cloud** dashboard still updates only when the new files are committed and pushed. |
+| 12 | ~~Root `requirements.txt` with Streamlit/Plotly would bloat the Airflow image~~ | ✅ **Resolved in Stage 8:** split into `requirements-pipeline.txt` (image) and `requirements.txt` (laptop) |
+| 14 | Each daily export rewrites `dashboard/data/` (at least `manifest.json`), so `git status` shows changes every day | Expected: commit and push them when the cloud dashboard should be refreshed |
+| 15 | ~~Interview notes would be public in the repo~~ | ✅ **Resolved:** moved outside the repo and git-ignored (`docs/interview_prep.md`), never pushed |
 | 13 | Dashboard insight captions are fixed text about the full dataset; they don't change with filters | Labelled "Insight (full dataset)"; the KPI cards and charts do respond to filters |

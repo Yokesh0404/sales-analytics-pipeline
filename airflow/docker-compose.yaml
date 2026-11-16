@@ -39,6 +39,7 @@ x-airflow-common: &airflow-common
     - ../dbt:/opt/project/dbt               # dbt project (writable: dbt writes target/ and logs/)
     - ../data:/opt/project/data:ro          # raw CSVs (read-only)
     - ../logs:/opt/project/logs             # ingestion.log / quality.log
+    - ../dashboard/data:/opt/project/dashboard/data   # snapshot files written by export_snapshot
   depends_on: &airflow-common-depends-on
     airflow-postgres:
       condition: service_healthy
