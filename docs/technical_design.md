@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | In progress (Stages 1–4 of 8 complete) |
+| **Status** | In progress (Stages 1–5 of 8 complete) |
 | **Last updated** | 2026-11-16 |
 | **Author** | Yokesh |
 
@@ -83,24 +83,31 @@ Keeping raw data untouched means a mistake in a transformation can always be fix
 | Database | PostgreSQL 18 | Free, widely used, supported by dbt and Airflow |
 | Loading | pandas + SQLAlchemy | `DataFrame.to_sql` makes CSV → table a few lines of code |
 | Transformation | dbt-core 1.12 + dbt-postgres 1.11 | SQL-based models with built-in testing, lineage and docs |
-| Orchestration | Apache Airflow (Docker Compose) | Industry-standard scheduler; Docker avoids Windows install issues |
+| Orchestration | Apache Airflow 3.3.2 (Docker Compose, LocalExecutor) | Industry-standard scheduler; Docker avoids Windows install issues |
 | Dashboard | Streamlit + Plotly | Pure-Python web app with interactive charts |
 | Config | python-dotenv + `.env` | Keeps credentials out of source control |
 | Version control | Git (local) | History of every stage |
 
 ---
 
-## 3. What is built so far (Stages 1–4)
+## 3. What is built so far (Stages 1–5)
 
 ### 3.1 Repository layout
 
 ```
 sales_analytics_pipeline/
-├── .env.example          # template for DB credentials (committed)
+├── .env.example          # template for DB + Airflow credentials (committed)
 ├── .env                  # real credentials (git-ignored)
 ├── .gitignore
+├── .dockerignore         # only requirements.txt goes into the Docker build
 ├── README.md
-├── requirements.txt      # pinned Python dependencies
+├── requirements.txt      # pinned Python dependencies (laptop AND Airflow image)
+├── airflow/
+│   ├── Dockerfile        # official Airflow image + separate venv for the pipeline
+│   ├── docker-compose.yaml  # metadata Postgres, init, api-server, scheduler, dag-processor
+│   ├── dags/
+│   │   └── olist_pipeline.py  # the daily DAG
+│   └── logs/             # Airflow task logs (git-ignored)
 ├── data/
 │   └── raw/              # Olist CSVs go here (git-ignored, .gitkeep tracked)
 ├── dbt/                  # dbt project "olist_dbt"
@@ -136,7 +143,8 @@ sales_analytics_pipeline/
 
 **Dependency management**
 - A project-local virtual environment in `.venv/`.
-- `requirements.txt` pins exact versions: pandas 2.2.3, SQLAlchemy 2.0.36, psycopg2-binary 2.9.10, python-dotenv 1.0.1, dbt-core 1.12.7, dbt-postgres 1.11.0, dbt-adapters 1.24.5.
+- `requirements.txt` pins exact versions: pandas 2.2.3, SQLAlchemy 2.0.36, psycopg2-binary 2.9.10, python-dotenv 1.2.4, dbt-core 1.12.7, dbt-postgres 1.11.0, dbt-adapters 1.24.5.
+- The same file is installed into the Airflow image, so the laptop and Docker run identical versions. Building the image caught a stale pin: python-dotenv was still pinned at 1.0.1 after the Stage 4 dbt upgrade, which needs 1.2 or newer. It's fixed now.
 
 **Secrets handling**
 - `.env` is git-ignored (checked with `git check-ignore`). Only `.env.example` with placeholder values is committed.
@@ -304,6 +312,48 @@ Design notes:
 | Geolocation duplicates removed | 1,000,163 → 738,332 (−261,831, matches Stage 3) |
 | Delivered orders / average delivery / late rate | 96,476 orders, 12.5 days on average, 6.8% late |
 
+**`airflow/`: orchestration (Stage 5)**
+
+```mermaid
+flowchart LR
+    subgraph Docker["Docker Desktop (airflow/docker-compose.yaml)"]
+        API["airflow-apiserver<br/>UI + REST API :8080"]
+        SCH["airflow-scheduler<br/>decides + runs tasks<br/>(LocalExecutor)"]
+        DP["airflow-dag-processor<br/>reads dags/*.py"]
+        MDB[("airflow-postgres<br/>Airflow's own metadata")]
+        API --- MDB
+        SCH --- MDB
+        DP --- MDB
+    end
+    SCH -->|"host.docker.internal:5432<br/>scripts + dbt"| OLIST[("Laptop PostgreSQL<br/>olist database")]
+```
+
+- **Image:** `airflow/Dockerfile` extends `apache/airflow:3.3.2-python3.12` with a **separate virtual environment** (`/opt/airflow/pipeline-venv`) built from the project's `requirements.txt`. The pipeline's packages (pandas, SQLAlchemy 2, dbt) can never clash with the packages Airflow pins for itself. This resolves risk #3.
+- **Services:** a small Postgres for Airflow's *metadata* (run history, users), not the olist data; `airflow-init` (creates the metadata tables and the admin user, then exits); `api-server` (UI and REST API on port 8080); `scheduler` (with LocalExecutor it also runs the tasks); `dag-processor`. Compared with the official compose file, Celery, Redis, workers and the triggerer are left out to save memory on a 5.9 GB laptop. The 4 services use about 1.2 GB together.
+- **Mounts:** `src/` and `data/` (read-only), `dbt/` (writable, for `target/` and logs), `logs/`, and `airflow/dags`, `airflow/logs`. Code changes on the laptop are picked up without rebuilding the image.
+- **Secrets:** all values come from `.env` through `docker compose --env-file ../.env`. That covers the olist DB credentials, the Airflow admin login, the metadata-DB password, the Fernet key and the JWT secret. `${VAR:?message}` makes Compose stop with a clear error if one is missing. The compose file contains no secrets.
+- **Reaching the laptop's PostgreSQL:** the containers set `POSTGRES_HOST=host.docker.internal`, which overrides `localhost` from `.env`, because `load_dotenv()` never overwrites variables that are already set. Tested before building: Docker Desktop forwards the traffic so it arrives from `127.0.0.1`, which the default `pg_hba.conf` already allows. **No `pg_hba.conf` or `listen_addresses` change was needed.** This resolves risk #2.
+- **DAG `olist_pipeline`** (`airflow/dags/olist_pipeline.py`): `@daily`, `catchup=False`, `max_active_runs=1`, `retries=2` with a 2-minute delay, and a 30-minute timeout per task. Four `BashOperator` tasks: `ingest_raw >> quality_checks >> dbt_run >> dbt_test`. A non-zero exit code fails the task, and the tasks after it don't run. Each task has `doc_md` describing it in the UI.
+- **Airflow 3 scheduling note:** `@daily` runs at the *start* of each day (Airflow 2 ran it at the end). Unpausing the DAG therefore started today's scheduled run straight away, before the manual trigger.
+
+**Airflow runs (2026-11-16): 2 of 2 succeeded, 8 of 8 tasks on the first try**
+
+| Run | ingest_raw | quality_checks | dbt_run | dbt_test | Result |
+|---|---|---|---|---|---|
+| `scheduled__2026-11-16T00:00` (started when unpaused) | ✅ 234 s | ✅ 21 s | ✅ 96 s | ✅ 34 s | SUCCESS |
+| `manual__2026-11-16T09:50` (triggered through the REST API) | ✅ 205 s | ✅ 17 s | ✅ 48 s | ✅ 41 s | SUCCESS |
+
+Task logs from the manual run: *"Ingestion finished successfully: 9 tables loaded"*, *"Summary: 46 PASS, 4 WARN, 0 FAIL"*, dbt run *"PASS=15"*, dbt test *"PASS=65"*. `raw.orders._loaded_at` and `quality.check_results` confirm the container run wrote to the laptop's database. Next scheduled run: 2026-11-17 00:00 UTC (only while Docker Desktop is running).
+
+#### Airflow concepts (interview version)
+
+- **Airflow** is a tool that *runs your data jobs in the right order, on a schedule, and shows you what happened*. It doesn't process data itself; it tells your scripts when to run.
+- **DAG (Directed Acyclic Graph):** the workflow, meaning a list of tasks plus the arrows between them. *Directed* means arrows have a direction (ingest → quality). *Acyclic* means no loops, so the pipeline always finishes. Mine is a straight line of 4 tasks.
+- **Task:** one step in the DAG. Here each task runs one command (`python src/ingest.py`) through a `BashOperator`. The command's exit code decides success or failure.
+- **Scheduler:** the part that checks, every few seconds, *"is anything due to run, and are its upstream tasks done?"* and starts it. With LocalExecutor it also runs the task as a process in the same container.
+- **Why Docker:** Airflow doesn't run natively on Windows. Docker runs it on Linux inside a container, so it works the same on any machine. Adding the pipeline's own environment to the image means *"it works on my laptop"* also means *"it works in Airflow"*. The build even caught a dependency pin that was wrong on the laptop.
+- **Why retries:** many failures are temporary, such as the database restarting, a network blip, or a locked file. Retrying twice with a 2-minute wait fixes those without anyone waking up. Real bugs still fail after the retries, and the DAG stops so bad data never reaches the dashboard. Retries are safe only because every task is **idempotent**: re-running ingestion or dbt gives the same result.
+
 ### 3.3 Current state
 
 | Item | Status |
@@ -326,13 +376,19 @@ Design notes:
 | Marts reconcile with raw totals | ✅ Verified |
 | `ingest.py` re-runs with dbt tables present (risk #5) | ✅ Verified |
 | dbt docs generated | ✅ Done |
-| Stage 5: Airflow orchestration in Docker | ⏳ Next |
+| Airflow 3.3.2 image built (pipeline venv: pandas 2.2.3, SQLAlchemy 2.0.36, dbt 1.12.7) | ✅ Done |
+| Containers reach the laptop's PostgreSQL through `host.docker.internal` (no `pg_hba.conf` change) | ✅ Verified |
+| All 4 Airflow services healthy; UI/API at http://localhost:8080 with admin login from `.env` | ✅ Verified (REST API login) |
+| DAG `olist_pipeline` parsed with no import errors | ✅ Verified |
+| DAG runs end to end: 2 runs, 8 of 8 tasks succeeded on the first try | ✅ Verified |
+| Airflow retries | ⚠️ Configured (`retries=2`) but not exercised, because no task failed |
+| Stage 6: KPI SQL queries | ⏳ Next |
 
 ---
 
-## 4. Planned design (Stages 5–8)
+## 4. Planned design (Stages 6–8)
 
-> Sections 4.1–4.3 describe the original plan for stages already built. Section 3 has what was actually built. Sections 4.4 onward are still plans and may change.
+> Sections 4.1–4.4 describe the original plan for stages already built. Section 3 has what was actually built. Sections 4.5 onward are still plans and may change.
 
 ### 4.1 Stage 2: Ingestion (`src/ingest.py`) (built)
 
@@ -355,7 +411,9 @@ The built design differs from the original plan in two ways:
 - **Two facts instead of one:** the plan had a single item-level `fact_orders`. The build adds an order-level `fct_orders`, so order counts, delivery metrics and review scores don't need `COUNT(DISTINCT order_id)` workarounds.
 - **The schema is named `analytics`**, not `marts`.
 
-### 4.4 Stage 5: Orchestration (Airflow in Docker)
+### 4.4 Stage 5: Orchestration (Airflow in Docker) (built)
+
+Built as planned (see section 3.2). The differences from this plan: retries are 2 (not 1), LocalExecutor without a triggerer, and the pipeline runs in its own venv inside the image.
 
 - `docker-compose.yml` based on the official Airflow image, with its own small Postgres container for Airflow's metadata.
 - Pipeline code and the dbt project are mounted into the containers.
@@ -414,9 +472,12 @@ Problem statement, architecture diagram (Mermaid), tech stack, setup and run ins
 | # | Item | Plan |
 |---|---|---|
 | 1 | Project sits in a OneDrive-synced folder; syncing `.venv/` may cause slowdowns or file locks | Monitor; move the project out of OneDrive if issues appear |
-| 2 | Airflow in Docker must reach host Postgres | Use `host.docker.internal`; allow connections in `pg_hba.conf` if needed |
-| 3 | Airflow and dbt dependency conflicts in one Python environment | Install dbt in a separate virtual environment inside the Airflow image |
+| 2 | ~~Airflow in Docker must reach host Postgres~~ | ✅ **Resolved in Stage 5:** `host.docker.internal` works with the default `pg_hba.conf` |
+| 3 | ~~Airflow and dbt dependency conflicts in one Python environment~~ | ✅ **Resolved in Stage 5:** separate pipeline venv inside the image |
 | 4 | Dashboard deployment conflicts with the local-only rule | Decide before Stage 7 (see 4.6) |
 | 5 | ~~`if_exists="replace"` drops raw tables; dbt staging views would block it~~ | ✅ **Resolved in Stage 4:** staging is materialized as tables (see 3.2). Verified by re-running ingestion. |
 | 6 | ~~Known Olist quirks: missing delivery dates, products without a category, multiple reviews per order~~ | ✅ **Resolved in Stage 4:** handled in staging and `fct_orders` (see Stage 3 table in 3.2) |
 | 7 | Marts are only as fresh as the last `dbt run`; re-running ingestion alone doesn't update them | Expected for daily batch; the Airflow DAG always runs dbt after ingestion |
+| 8 | Laptop has 5.9 GB RAM (about 3 GB for Docker). The first image builds crashed Docker Desktop's storage under memory pressure | Lean compose (no Celery/Redis/triggerer); close other apps before `docker compose up`; stop Airflow when not needed (`docker compose down`) |
+| 9 | Health checks use the Airflow CLI, which is slow on this laptop. With a 10-second timeout, healthy services were reported unhealthy | Timeout raised to 60 seconds |
+| 10 | The DAG only runs while Docker Desktop is running | Acceptable for a local portfolio project; a cloud scheduler would be needed for a true daily run |

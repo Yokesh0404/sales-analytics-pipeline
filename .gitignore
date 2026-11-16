@@ -20,6 +20,12 @@ dbt/logs/
 dbt/dbt_packages/
 dbt/.user.yml
 
+# --- Airflow: generated at runtime ---
+airflow/logs/
+airflow/config/
+airflow/plugins/
+airflow/dags/__pycache__/
+
 # --- Editor / OS files ---
 .vscode/
 .DS_Store

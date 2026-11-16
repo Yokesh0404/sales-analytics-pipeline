@@ -5,7 +5,7 @@
 pandas==2.2.3            # read CSVs and work with tables in Python
 SQLAlchemy==2.0.36       # connect Python to PostgreSQL in a database-agnostic way
 psycopg2-binary==2.9.10  # the PostgreSQL driver SQLAlchemy uses under the hood
-python-dotenv==1.0.1     # load DB credentials from the .env file
+python-dotenv==1.2.4     # load DB credentials from the .env file (dbt 1.12 needs >= 1.2)
 
 # Stage 4: transformation
 dbt-core==1.12.7         # SQL models, tests and docs
