@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | In progress (Stages 1–5 of 8 complete) |
+| **Status** | In progress (Stages 1–6 of 8 complete) |
 | **Last updated** | 2026-11-16 |
 | **Author** | Yokesh |
 
@@ -90,7 +90,7 @@ Keeping raw data untouched means a mistake in a transformation can always be fix
 
 ---
 
-## 3. What is built so far (Stages 1–5)
+## 3. What is built so far (Stages 1–6)
 
 ### 3.1 Repository layout
 
@@ -117,12 +117,17 @@ sales_analytics_pipeline/
 │   │   └── generate_schema_name.sql  # use schema names exactly as written
 │   ├── models/
 │   │   ├── staging/      # _sources.yml, _staging.yml, 9 x stg_*.sql
-│   │   └── marts/        # _marts.yml, fct_*.sql, dim_*.sql
+│   │   └── marts/        # _marts.yml, 3 x fct_*.sql, 4 x dim_*.sql
+│   │       └── kpi/      # _kpi.yml, 8 x kpi_*.sql (pre-computed KPI tables)
+│   ├── tests/            # 3 singular tests (KPI reconciliation, shares, cohort rules)
 │   ├── target/           # compiled SQL + docs site (git-ignored)
 │   └── logs/             # dbt logs (git-ignored)
 ├── docs/
-│   └── technical_design.md
+│   ├── technical_design.md
+│   └── kpi_definitions.md   # every KPI: definition, formula, business question
 ├── logs/                 # ingestion.log, quality.log (git-ignored)
+├── sql/
+│   └── kpis/             # 01_ … 10_*.sql: one standalone, commented query per KPI
 └── src/
     ├── db.py             # get_engine(): single place that builds the DB connection
     ├── check_connection.py  # smoke test: connects and prints the Postgres version
@@ -211,6 +216,7 @@ sales_analytics_pipeline/
 erDiagram
     dim_customers ||--o{ fct_orders      : "customer_id"
     dim_date      ||--o{ fct_orders      : "date_key"
+    fct_orders    ||--o{ fct_order_payments : "order_id"
     fct_orders    ||--o{ fct_order_items : "order_id"
     dim_products  ||--o{ fct_order_items : "product_id"
     dim_sellers   ||--o{ fct_order_items : "seller_id"
@@ -250,6 +256,15 @@ erDiagram
         bool is_late
         int review_score "latest review"
     }
+    fct_order_payments {
+        text payment_key PK "order_id-payment_sequential"
+        text order_id FK
+        text customer_id FK
+        int date_key FK
+        text payment_type
+        int payment_installments
+        numeric payment_value
+    }
     dim_customers {
         text customer_id PK
         text customer_unique_id "the real person"
@@ -282,6 +297,7 @@ erDiagram
 ```
 
 Design notes:
+- **`fct_order_payments`** (one row per payment, 103,886 rows) was added in Stage 6. Payment type only existed in staging, and KPIs must read the `analytics` schema only.
 - **Two fact tables at two grains**, rather than one. `fct_order_items` gets order-level values (customer, date, delivery) by joining `fct_orders`, so delivery logic is written once.
 - **`fct_orders` includes all 99,441 orders**, including 775 with no items (mostly canceled or unavailable). Their money columns are 0, so status counts stay complete.
 - **`payment_value_share`:** payments are recorded per order, not per item, so each item gets a share in proportion to its value (`payment_total × item_total / order_total`). Shares match order payments for every order except one 21-item order, which is 6 cents off from rounding.
@@ -354,6 +370,29 @@ Task logs from the manual run: *"Ingestion finished successfully: 9 tables loade
 - **Why Docker:** Airflow doesn't run natively on Windows. Docker runs it on Linux inside a container, so it works the same on any machine. Adding the pipeline's own environment to the image means *"it works on my laptop"* also means *"it works in Airflow"*. The build even caught a dependency pin that was wrong on the laptop.
 - **Why retries:** many failures are temporary, such as the database restarting, a network blip, or a locked file. Retrying twice with a 2-minute wait fixes those without anyone waking up. Real bugs still fail after the retries, and the DAG stops so bad data never reaches the dashboard. Retries are safe only because every task is **idempotent**: re-running ingestion or dbt gives the same result.
 
+**`sql/kpis/` + `dbt/models/marts/kpi/`: analytics (Stage 6)**
+
+- **10 standalone SQL files** (`sql/kpis/01_…10_*.sql`), one per KPI, querying only `analytics.*`. They're written for reading and explaining: each starts with the business question and the definition, then builds the answer in named CTE steps. Full definitions are in [kpi_definitions.md](kpi_definitions.md).
+- **8 dbt KPI tables** in `analytics` (`kpi_monthly_revenue`, `kpi_category_revenue`, `kpi_seller_performance`, `kpi_state_summary`, `kpi_delivery_performance`, `kpi_payment_mix`, `kpi_repeat_customers`, `kpi_cohort_retention`). They're small and pre-computed, so the dashboard reads them instantly instead of re-aggregating 112k rows on every click. They use `ref()`, so they rebuild automatically in the daily DAG's `dbt_run` task.
+- **Same logic in both places:** the SQL files exist so the queries can be read and run on their own. The dbt tables are what the dashboard uses. A cross-check confirmed they return identical numbers (monthly revenue total, top category, SP revenue, repeat rate, card share, cohort rows).
+- **Tests: 93 in total** (65 from Stage 4 + 25 on the new fact and KPI tables + 3 *singular* tests). A singular test is a plain SQL file in `dbt/tests/` that returns rows only when something is wrong:
+  - `assert_kpi_revenue_matches_facts`: the KPI revenue total equals the fact table's total.
+  - `assert_shares_sum_to_100`: category, state and payment shares each total 100%.
+  - `assert_cohort_retention_valid`: month 0 = 100%, no duplicate rows, retention between 0 and 100%.
+- **Date spine:** `kpi_monthly_revenue` joins every month between the first and last sale, so Nov 2016 (0 delivered orders) appears as 0. Otherwise `LAG()` would compare Dec 2016 with Oct 2016 and call it "month over month".
+
+**Headline results:** R$ 15.42M delivered revenue from 96,478 orders. Revenue was flat at about R$ 1.0–1.13M per month in 2018. Late delivery drops the average review from 4.29 to 1.70 (8+ days late). Only 3.0% of customers ordered twice. See [kpi_definitions.md](kpi_definitions.md) for all results.
+
+#### SQL concepts used (interview version)
+
+- **CTE (`WITH name AS (...)`):** a named, temporary result you can use in the next step, like a variable in Python. It turns one huge query into readable steps: "first orders per customer, then summarise".
+- **Window function (`... OVER (...)`):** calculates across a set of rows *without collapsing them* the way `GROUP BY` does. For example, `SUM(revenue) OVER ()` puts the grand total on every row, so each row can compute its % share.
+- **`LAG(x) OVER (ORDER BY month)`:** "the value of x on the previous row". It's used for month-over-month growth: `(this month − LAG) / LAG`. It needs a gap-free month list (date spine), otherwise "previous row" isn't "previous month".
+- **`RANK() OVER (ORDER BY revenue DESC)`:** numbers rows 1, 2, 3… by revenue, with ties getting the same rank.
+- **`FILTER (WHERE …)`:** aggregates only some rows, e.g. `COUNT(*) FILTER (WHERE orders > 1)`. It's a cleaner `CASE WHEN` inside an aggregate.
+- **`ROLLUP(state)`:** adds a grand-total row to a `GROUP BY` (state = NULL), giving per-state and overall rates in one query.
+- **Cohort analysis:** group customers by *when they started* (first purchase month), then track what % of each group comes back in month 1, 2, 3… It separates "are we keeping customers?" from "are we just getting more new ones?"
+
 ### 3.3 Current state
 
 | Item | Status |
@@ -382,13 +421,18 @@ Task logs from the manual run: *"Ingestion finished successfully: 9 tables loade
 | DAG `olist_pipeline` parsed with no import errors | ✅ Verified |
 | DAG runs end to end: 2 runs, 8 of 8 tasks succeeded on the first try | ✅ Verified |
 | Airflow retries | ⚠️ Configured (`retries=2`) but not exercised, because no task failed |
-| Stage 6: KPI SQL queries | ⏳ Next |
+| `fct_order_payments` added to the star schema (103,886 rows) | ✅ Done |
+| 10 KPI SQL files in `sql/kpis/`, all run successfully | ✅ Done |
+| 8 dbt KPI tables built; 24 models, 93 tests pass (incl. 3 singular tests) | ✅ Done |
+| SQL files and dbt KPI tables return identical numbers | ✅ Verified (6 cross-checks) |
+| `docs/kpi_definitions.md` written | ✅ Done |
+| Stage 7: Streamlit dashboard | ⏳ Next |
 
 ---
 
-## 4. Planned design (Stages 6–8)
+## 4. Planned design (Stages 7–8)
 
-> Sections 4.1–4.4 describe the original plan for stages already built. Section 3 has what was actually built. Sections 4.5 onward are still plans and may change.
+> Sections 4.1–4.5 describe the original plan for stages already built. Section 3 has what was actually built. Sections 4.6 onward are still plans and may change.
 
 ### 4.1 Stage 2: Ingestion (`src/ingest.py`) (built)
 
@@ -426,7 +470,9 @@ ingest  →  quality_checks  →  dbt_run  →  dbt_test
 
 - Each task is a `BashOperator`. A failure stops everything downstream, and tasks retry once.
 
-### 4.5 Stage 6: Analytics (`sql/`)
+### 4.5 Stage 6: Analytics (`sql/`) (built)
+
+Built with 10 KPIs instead of 5, plus dbt KPI tables (see section 3.2 and [kpi_definitions.md](kpi_definitions.md)). The original plan:
 
 One commented `.sql` file per KPI, querying the `analytics` schema:
 
@@ -444,7 +490,7 @@ Note: in Olist, `customer_id` is unique per order. Repeat buyers can only be fou
 
 - Multi-page app: **Overview KPIs**, **Sales trends**, **Products & categories**, **Delivery & reviews**.
 - Sidebar filters: date range, customer state, product category.
-- Reads only from `analytics` tables. Query results are cached with `@st.cache_data`.
+- Reads only from `analytics` tables: the `kpi_*` tables for fixed views, and the facts and dimensions where sidebar filters (date range, state, category) need row-level data. Query results are cached with `@st.cache_data`.
 - Charts built with Plotly.
 - **Deployment (open decision):** Streamlit Community Cloud deploys only from a GitHub repo, which conflicts with the local-only constraint. The options are:
   1. Run the dashboard locally only (`streamlit run`). This is the default.

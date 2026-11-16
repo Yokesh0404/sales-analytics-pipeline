@@ -1,0 +1,87 @@
+version: 2
+
+# KPI tables: small, pre-computed tables the dashboard reads directly.
+# Common definitions:
+#   revenue = item price + freight of DELIVERED orders (BRL)
+#   orders  = distinct delivered orders
+#   month   = month of purchase
+models:
+  - name: kpi_monthly_revenue
+    description: "One row per purchase month: revenue, orders, AOV and month-over-month growth. Months with no sales are included as 0."
+    columns:
+      - name: month
+        description: "First day of the purchase month. Primary key."
+        data_tests: [unique, not_null]
+      - name: revenue
+        description: "Price + freight of delivered orders."
+        data_tests: [not_null]
+      - name: aov
+        description: "Average order value = revenue / orders. NULL in months with no orders."
+      - name: revenue_mom_growth_pct
+        description: "% change in revenue vs the previous month (LAG)."
+
+  - name: kpi_category_revenue
+    description: "One row per product category: revenue, orders, share of total and rank."
+    columns:
+      - name: category_name
+        description: "English category name, or 'unknown'. Primary key."
+        data_tests: [unique, not_null]
+      - name: revenue_share_pct
+        description: "Category revenue as % of all delivered revenue."
+
+  - name: kpi_seller_performance
+    description: "One row per seller: revenue, orders, average review score and late-delivery rate."
+    columns:
+      - name: seller_id
+        description: "Primary key."
+        data_tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_sellers')
+                field: seller_id
+      - name: avg_review_score
+        description: "Average review score of the seller's orders (each order counted once)."
+
+  - name: kpi_state_summary
+    description: "One row per customer state: revenue, orders, customers, AOV, late rate, delivery days and review score."
+    columns:
+      - name: state
+        description: "Customer state (two-letter code). Primary key."
+        data_tests: [unique, not_null]
+
+  - name: kpi_delivery_performance
+    description: "One row per purchase month: delivered orders, late rate, average delivery days, review score on-time vs late."
+    columns:
+      - name: month
+        description: "First day of the purchase month. Primary key."
+        data_tests: [unique, not_null]
+      - name: late_rate_pct
+        description: "% of delivered orders that arrived after the estimated date."
+
+  - name: kpi_payment_mix
+    description: "One row per payment type: count and value share, average installments. All payments."
+    columns:
+      - name: payment_type
+        description: "Primary key."
+        data_tests: [unique, not_null]
+
+  - name: kpi_repeat_customers
+    description: "Single row: share of real customers (customer_unique_id) with more than one delivered order."
+    columns:
+      - name: repeat_customer_rate_pct
+        description: "Customers with 2+ orders / all customers."
+        data_tests: [not_null]
+
+  - name: kpi_cohort_retention
+    description: "One row per (cohort month, months since first purchase): % of the cohort that ordered in that month."
+    columns:
+      - name: cohort_month
+        description: "Month of the customers' first delivered order."
+        data_tests: [not_null]
+      - name: months_since_first
+        description: "0 = first month, 1 = next month, and so on."
+        data_tests: [not_null]
+      - name: retention_pct
+        description: "active_customers / cohort_customers."

@@ -113,6 +113,46 @@ models:
       - name: is_late
         description: "True if the parent order was delivered late."
 
+  - name: fct_order_payments
+    description: "Fact table. Grain: one row per payment. An order can have several payments (e.g. voucher + credit card)."
+    columns:
+      - name: payment_key
+        description: "Primary key: order_id + '-' + payment_sequential."
+        data_tests: [unique, not_null]
+      - name: order_id
+        description: "Foreign key to fct_orders."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('fct_orders')
+                field: order_id
+      - name: customer_id
+        description: "Foreign key to dim_customers."
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_customers')
+                field: customer_id
+      - name: date_key
+        description: "Purchase date of the order. Foreign key to dim_date."
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: payment_type
+        description: "credit_card, boleto, voucher, debit_card or not_defined."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["credit_card", "boleto", "voucher", "debit_card", "not_defined"]
+      - name: payment_installments
+        description: "Number of installments the customer chose."
+      - name: payment_value
+        description: "Amount paid with this payment in BRL."
+        data_tests: [not_null]
+
   # ---------------- Dimensions ----------------
   - name: dim_customers
     description: "Dimension. One row per customer_id, with location."
