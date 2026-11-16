@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Status** | In progress (Stage 1 of 8 complete) |
-| **Last updated** | 2026-11-15 |
+| **Status** | In progress (Stages 1–2 of 8 complete) |
+| **Last updated** | 2026-11-16 |
 | **Author** | Yokesh |
 
 ---
@@ -89,7 +89,7 @@ Keeping raw data untouched means a mistake in a transformation can always be fix
 
 ---
 
-## 3. What is built so far (Stage 1: project setup)
+## 3. What is built so far (Stages 1–2)
 
 ### 3.1 Repository layout
 
@@ -104,9 +104,11 @@ sales_analytics_pipeline/
 │   └── raw/              # Olist CSVs go here (git-ignored, .gitkeep tracked)
 ├── docs/
 │   └── technical_design.md
+├── logs/                 # ingestion.log (git-ignored, created on first run)
 └── src/
     ├── db.py             # get_engine(): single place that builds the DB connection
-    └── check_connection.py  # smoke test: connects and prints the Postgres version
+    ├── check_connection.py  # smoke test: connects and prints the Postgres version
+    └── ingest.py         # loads every CSV into the raw schema
 ```
 
 ### 3.2 Components
@@ -126,18 +128,39 @@ sales_analytics_pipeline/
 **Secrets handling**
 - `.env` is git-ignored (checked with `git check-ignore`). Only `.env.example` with placeholder values is committed.
 
+**`src/ingest.py`: ingestion (Stage 2)**
+- Implements the design in section 4.1. Each CSV is read with `dtype=str`, so every raw column is `TEXT` and values such as zip codes keep their leading zeros.
+- Each table is written inside its own transaction (`engine.begin()`). If a load fails partway, the previous version of that table is kept.
+- Paths are built from the script's own location, so it works from any working directory.
+- A full run takes about 80 seconds. Most of that is `geolocation`, at 1M rows and about 44 seconds.
+
+**Loaded tables (verified 2026-11-16).** Row counts in PostgreSQL match an independent count of each CSV, done with Python's `csv` module:
+
+| Table | Rows |
+|---|---:|
+| `raw.customers` | 99,441 |
+| `raw.geolocation` | 1,000,163 |
+| `raw.order_items` | 112,650 |
+| `raw.order_payments` | 103,886 |
+| `raw.order_reviews` | 99,224 |
+| `raw.orders` | 99,441 |
+| `raw.products` | 32,951 |
+| `raw.sellers` | 3,095 |
+| `raw.product_category_name_translation` | 71 |
+
 ### 3.3 Current state
 
 | Item | Status |
 |---|---|
 | Virtual environment created, dependencies installed | ✅ Done |
 | Git repository initialized, Stage 1 committed (`910bb5c`) | ✅ Done |
-| `olist` database created in PostgreSQL | ⏳ Pending (user) |
-| Real password set in `.env` | ⏳ Pending (user) |
-| Connection test passes | ❌ Failing: `.env` still has the placeholder password (PostgreSQL 18 service is running) |
-| Olist CSVs placed in `data/raw/` | ⏳ Pending (user) |
-
-**Blocking Stage 2:** set the real password in `.env`, create the `olist` database, and add the 9 Olist CSVs to `data/raw/`.
+| `olist` database created, `.env` configured | ✅ Done |
+| Connection test passes (PostgreSQL 18.7) | ✅ Done |
+| Olist CSVs placed in `data/raw/` (9 files) | ✅ Done |
+| Ingestion loads all 9 tables; counts match CSVs | ✅ Done |
+| Re-run gives identical counts (idempotent) | ✅ Verified |
+| A failing file is logged and skipped; run exits with code 1 | ✅ Verified (test with an empty CSV) |
+| Stage 3: data quality checks | ⏳ Next |
 
 ---
 
@@ -288,4 +311,5 @@ Problem statement, architecture diagram (Mermaid), tech stack, setup and run ins
 | 2 | Airflow in Docker must reach host Postgres | Use `host.docker.internal`; allow connections in `pg_hba.conf` if needed |
 | 3 | Airflow and dbt dependency conflicts in one Python environment | Install dbt in a separate virtual environment inside the Airflow image |
 | 4 | Dashboard deployment conflicts with the local-only rule | Decide before Stage 7 (see 4.6) |
-| 5 | Known Olist quirks: missing delivery dates, products without a category, multiple reviews per order | Report in Stage 3; handle explicitly in dbt staging models |
+| 5 | `if_exists="replace"` drops each raw table on every run. PostgreSQL refuses to drop a table while a view depends on it, so dbt staging *views* would make re-ingestion fail | In Stage 4, materialize staging models as tables, or have ingestion drop with `CASCADE` |
+| 6 | Known Olist quirks: missing delivery dates, products without a category, multiple reviews per order | Report in Stage 3; handle explicitly in dbt staging models |
