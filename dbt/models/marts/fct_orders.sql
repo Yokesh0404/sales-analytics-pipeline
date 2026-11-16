@@ -26,6 +26,22 @@ payments as (
     group by order_id
 ),
 
+-- Each order's MAIN category = the category with the most revenue in the order.
+-- 0.8% of orders contain 2+ categories; giving each order exactly one category
+-- lets order counts be added up by category without counting an order twice.
+category_ranked as (
+    select
+        i.order_id,
+        p.category_name,
+        row_number() over (
+            partition by i.order_id
+            order by sum(i.price + i.freight_value) desc, p.category_name   -- tie-break: alphabetical
+        ) as category_rank
+    from {{ ref('stg_order_items') }} as i
+    join {{ ref('dim_products') }}    as p on p.product_id = i.product_id
+    group by i.order_id, p.category_name
+),
+
 -- Some orders have more than one review: keep only the most recent one.
 -- row_number() numbers each order's reviews 1, 2, 3 ... newest first.
 reviews_ranked as (
@@ -59,8 +75,10 @@ select
         when o.delivered_to_customer_at is null then null
         else o.delivered_to_customer_at::date > o.estimated_delivery_at::date
     end                                                            as is_late,
-    r.review_score    -- NULL if the order has no review
+    r.review_score,   -- NULL if the order has no review
+    mc.category_name                                               as main_category   -- NULL if no items
 from orders as o
-left join items          as i on i.order_id = o.order_id
-left join payments       as p on p.order_id = o.order_id
-left join reviews_ranked as r on r.order_id = o.order_id and r.review_rank = 1
+left join items           as i  on i.order_id = o.order_id
+left join payments        as p  on p.order_id = o.order_id
+left join reviews_ranked  as r  on r.order_id = o.order_id and r.review_rank = 1
+left join category_ranked as mc on mc.order_id = o.order_id and mc.category_rank = 1

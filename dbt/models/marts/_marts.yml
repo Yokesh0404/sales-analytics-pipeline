@@ -48,6 +48,8 @@ models:
               arguments:
                 values: [1, 2, 3, 4, 5]
                 quote: false
+      - name: main_category
+        description: "Category with the most revenue in the order (used to count orders by category without double counting). NULL for orders without items."
 
   - name: fct_order_items
     description: "Fact table. Grain: one row per order item. Use for revenue by product, category and seller."

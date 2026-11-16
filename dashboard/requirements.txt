@@ -1,0 +1,10 @@
+# Packages for the dashboard ONLY (used by Streamlit Community Cloud).
+# Much smaller than the project's requirements.txt: no dbt or pipeline packages.
+# Versions match the project's requirements.txt.
+streamlit==1.67.0
+plotly==7.1.0
+pandas==2.2.3
+pyarrow==26.0.1
+SQLAlchemy==2.0.36       # only used in "db" mode
+psycopg2-binary==2.9.10  # only used in "db" mode
+python-dotenv==1.2.4     # only used in "db" mode

@@ -74,6 +74,54 @@ models:
         description: "Customers with 2+ orders / all customers."
         data_tests: [not_null]
 
+  # ---- Dashboard cubes: additive tables the dashboard filters and sums ----
+  - name: kpi_sales_cube
+    description: "Item-level revenue by month x customer state x category. All columns are additive, so any filter combination can be summed. No customer-level data."
+    columns:
+      - name: month
+        description: "First day of the purchase month."
+        data_tests: [not_null]
+      - name: customer_state
+        description: "Customer state."
+        data_tests: [not_null]
+      - name: category_name
+        description: "Product category of the items."
+        data_tests: [not_null]
+      - name: revenue
+        description: "Price + freight of delivered items."
+        data_tests: [not_null]
+
+  - name: kpi_order_cube
+    description: "Order-level KPIs by month x customer state x main category x delivery status. Each order counted once. Averages stored as sum + count."
+    columns:
+      - name: month
+        description: "First day of the purchase month."
+        data_tests: [not_null]
+      - name: main_category
+        description: "The order's main category (most revenue)."
+        data_tests: [not_null]
+      - name: delivery_status
+        description: "no delivery date / on time / late 1-3 / late 4-7 / late 8+ days."
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["0. no delivery date", "1. on time", "2. late 1-3 days", "3. late 4-7 days", "4. late 8+ days"]
+      - name: orders
+        description: "Delivered orders in this cell."
+        data_tests: [not_null]
+
+  - name: kpi_seller_cube
+    description: "Seller revenue, orders and review sums by seller x month x customer state x category."
+    columns:
+      - name: seller_id
+        description: "Seller (business identifier)."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_sellers')
+                field: seller_id
+
   - name: kpi_cohort_retention
     description: "One row per (cohort month, months since first purchase): % of the cohort that ordered in that month."
     columns:

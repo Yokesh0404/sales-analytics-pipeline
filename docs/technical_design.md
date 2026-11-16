@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | In progress (Stages 1–6 of 8 complete) |
+| **Status** | In progress (Stages 1–7 of 8 complete) |
 | **Last updated** | 2026-11-16 |
 | **Author** | Yokesh |
 
@@ -84,13 +84,13 @@ Keeping raw data untouched means a mistake in a transformation can always be fix
 | Loading | pandas + SQLAlchemy | `DataFrame.to_sql` makes CSV → table a few lines of code |
 | Transformation | dbt-core 1.12 + dbt-postgres 1.11 | SQL-based models with built-in testing, lineage and docs |
 | Orchestration | Apache Airflow 3.3.2 (Docker Compose, LocalExecutor) | Industry-standard scheduler; Docker avoids Windows install issues |
-| Dashboard | Streamlit + Plotly | Pure-Python web app with interactive charts |
+| Dashboard | Streamlit 1.67 + Plotly 7.1 (+ pyarrow for Parquet) | Pure-Python web app with interactive charts |
 | Config | python-dotenv + `.env` | Keeps credentials out of source control |
 | Version control | Git (local) | History of every stage |
 
 ---
 
-## 3. What is built so far (Stages 1–6)
+## 3. What is built so far (Stages 1–7)
 
 ### 3.1 Repository layout
 
@@ -108,6 +108,12 @@ sales_analytics_pipeline/
 │   ├── dags/
 │   │   └── olist_pipeline.py  # the daily DAG
 │   └── logs/             # Airflow task logs (git-ignored)
+├── dashboard/
+│   ├── app.py            # entry point: data mode, sidebar filters, navigation
+│   ├── loaders.py        # mode detection, cached loading, filters, formatting
+│   ├── views/            # overview.py, products_sellers.py, customers_delivery.py
+│   ├── data/             # snapshot: 5 Parquet files + manifest.json (about 1 MB, committed)
+│   └── requirements.txt  # slim requirements for Streamlit Cloud
 ├── data/
 │   └── raw/              # Olist CSVs go here (git-ignored, .gitkeep tracked)
 ├── dbt/                  # dbt project "olist_dbt"
@@ -124,7 +130,8 @@ sales_analytics_pipeline/
 │   └── logs/             # dbt logs (git-ignored)
 ├── docs/
 │   ├── technical_design.md
-│   └── kpi_definitions.md   # every KPI: definition, formula, business question
+│   ├── kpi_definitions.md   # every KPI: definition, formula, business question
+│   └── images/           # dashboard screenshots for the README
 ├── logs/                 # ingestion.log, quality.log (git-ignored)
 ├── sql/
 │   └── kpis/             # 01_ … 10_*.sql: one standalone, commented query per KPI
@@ -133,7 +140,8 @@ sales_analytics_pipeline/
     ├── check_connection.py  # smoke test: connects and prints the Postgres version
     ├── ingest.py         # loads every CSV into the raw schema
     ├── quality_checks.py # data quality checks on the raw schema
-    └── run_dbt.py        # loads .env, then runs any dbt command
+    ├── run_dbt.py        # loads .env, then runs any dbt command
+    └── export_snapshot.py  # exports the dashboard's KPI tables to dashboard/data/*.parquet
 ```
 
 ### 3.2 Components
@@ -393,6 +401,58 @@ Task logs from the manual run: *"Ingestion finished successfully: 9 tables loade
 - **`ROLLUP(state)`:** adds a grand-total row to a `GROUP BY` (state = NULL), giving per-state and overall rates in one query.
 - **Cohort analysis:** group customers by *when they started* (first purchase month), then track what % of each group comes back in month 1, 2, 3… It separates "are we keeping customers?" from "are we just getting more new ones?"
 
+**`dashboard/`: Streamlit dashboard (Stage 7)**
+
+```mermaid
+flowchart LR
+    subgraph Local["Laptop"]
+        PG[("PostgreSQL<br/>analytics.kpi_*")]
+        EXP["src/export_snapshot.py"]
+        PQ["dashboard/data/*.parquet<br/>(about 1 MB, aggregates only)"]
+        PG --> EXP --> PQ
+    end
+    APP["dashboard/app.py"]
+    PG -->|"db mode (local)"| APP
+    PQ -->|"snapshot mode (Streamlit Cloud,<br/>or DB unreachable)"| APP
+```
+
+- **Pages:**
+  - **Overview:** 5 KPI cards (revenue, orders, AOV, average review, on-time %) and monthly revenue with MoM growth.
+  - **Products & Sellers:** top-N categories with % share, and top-N sellers coloured by review score, with a table.
+  - **Customers & Delivery:** revenue by state, late rate by state, review score vs delay, repeat rate and the cohort retention heatmap.
+
+  Every chart has an R$ unit and a 💡 insight caption from Stage 6.
+- **Sidebar filters:** purchase-month range (default Jan 2017 – Aug 2018), customer state, product category. An empty selection means "all".
+- **Dashboard cubes (new dbt models):** the Stage 6 KPI tables are each summed along one dimension only, so they can't be filtered by month *and* state *and* category together. Three additive "cube" tables solve this. Every column is a sum or a count, so the app filters rows and adds them up, and averages are rebuilt as `sum / count`.
+  - `kpi_sales_cube`: month × state × category, item revenue (11,672 rows).
+  - `kpi_order_cube`: month × state × **main category** × delivery status, order counts, revenue, review and delivery sums (15,073 rows).
+  - `kpi_seller_cube`: seller × month × state × category (54,842 rows).
+- **Main category:** 780 delivered orders (0.8%) contain items from 2 or more categories. `fct_orders.main_category` (the category with the most revenue in the order) gives each order exactly one category, so order counts never double up when categories are filtered. Revenue by category still uses each item's real category.
+- **Data modes:** `DASHBOARD_DATA_MODE` = `db` / `snapshot` / `auto` (default), read from an environment variable or `st.secrets`. `auto` tries a `SELECT 1` on PostgreSQL and falls back to the snapshot if that fails. On Streamlit Cloud there's no `.env` and no reachable database, so it falls back automatically.
+- **Snapshot export:** `src/export_snapshot.py` writes 5 aggregated tables to Parquet (about 1 MB) plus `manifest.json` (export date, shown in the sidebar). A guard **refuses to export** any table with customer- or order-level columns (`customer_id`, `customer_unique_id`, `order_id`, zip, city, review text). Seller IDs are business identifiers, shortened to 8 characters in the UI.
+- **Caching:** `@st.cache_data` on `load_table(name, mode)` (1 hour) and on `resolve_mode()` (10 minutes). Each table is loaded once, and every later click or filter change is pandas filtering in memory.
+- **Tests: 104 dbt tests pass**, including the new singular test `assert_dashboard_cubes_reconcile` (every cube adds up to the fact-table revenue and order totals).
+
+**Verification (2026-11-16)**
+
+| Check | Result |
+|---|---|
+| All 3 pages, **db mode** (`AppTest`, headless) | ✅ 0 exceptions; 1 / 2 / 4 charts render |
+| All 3 pages, **snapshot mode** (`DASHBOARD_DATA_MODE=snapshot`) | ✅ 0 exceptions; identical numbers to db mode |
+| **Auto fallback** (`streamlit run` with an unreachable DB port) | ✅ Switched to snapshot: *"database not reachable (OperationalError)"* |
+| Default view KPI cards | R$ 15.37M · 96,211 orders · AOV R$ 159.79 · 4.16 ★ · 93.2% on time (= Stage 6 totals minus 2016) |
+| Filter test: Jan–Mar 2018, RJ, health_beauty | R$ 28.7K · 192 orders · AOV R$ 149.64 · 3.83 ★ · 79.7%. **Identical to SQL run directly on the fact tables** |
+| Screenshots | `docs/images/01_overview.png`, `02_products_sellers.png`, `03_customers_delivery.png` (Playwright + Edge) |
+
+Run it: `streamlit run dashboard/app.py` → http://localhost:8501. After each `dbt run`, refresh the snapshot with `python src/export_snapshot.py`.
+
+#### Dashboard concepts (interview version)
+
+- **How Streamlit works:** the whole script runs again from top to bottom every time the user clicks something. That keeps the code simple (no callbacks), but it means anything slow must be cached.
+- **Caching (`@st.cache_data`):** Streamlit remembers a function's result for the same inputs. The first visit reads the table from PostgreSQL or Parquet; every later rerun gets it from memory instantly. `ttl=3600` makes it re-read after an hour, so new pipeline runs show up. `mode` is a function argument, so the db and snapshot results are cached separately.
+- **Why snapshot mode:** Streamlit Community Cloud runs on the internet and can't reach a database on my laptop. Instead of exposing my database, I export the small, pre-aggregated KPI tables (about 1 MB) to Parquet and deploy them with the app. The same code reads either source; only `load_table` knows the difference. It's also safer: the files contain only aggregates, enforced by the export script.
+- **Why "cube" tables:** filters need data split by every filter dimension together. Storing sums and counts (not averages) means any filtered subset can be added up correctly. An average of averages would be wrong.
+
 ### 3.3 Current state
 
 | Item | Status |
@@ -426,13 +486,19 @@ Task logs from the manual run: *"Ingestion finished successfully: 9 tables loade
 | 8 dbt KPI tables built; 24 models, 93 tests pass (incl. 3 singular tests) | ✅ Done |
 | SQL files and dbt KPI tables return identical numbers | ✅ Verified (6 cross-checks) |
 | `docs/kpi_definitions.md` written | ✅ Done |
-| Stage 7: Streamlit dashboard | ⏳ Next |
+| Dashboard cubes (`kpi_sales_cube`, `kpi_order_cube`, `kpi_seller_cube`) + `fct_orders.main_category`; 27 models, 104 tests pass | ✅ Done |
+| `src/export_snapshot.py`: 5 aggregated tables → Parquet (about 1 MB), personal-data guard | ✅ Done |
+| Dashboard: 3 pages, sidebar filters, R$ units, insight captions, `st.cache_data` | ✅ Done |
+| Works in db mode, snapshot mode, and auto-fallback when the DB is unreachable | ✅ Verified |
+| Filtered numbers match SQL on the fact tables | ✅ Verified |
+| Screenshots in `docs/images/` | ✅ Done |
+| Stage 8: README + GitHub push + Streamlit Cloud deployment | ⏳ Next |
 
 ---
 
-## 4. Planned design (Stages 7–8)
+## 4. Planned design (Stage 8)
 
-> Sections 4.1–4.5 describe the original plan for stages already built. Section 3 has what was actually built. Sections 4.6 onward are still plans and may change.
+> Sections 4.1–4.6 describe the original plan for stages already built. Section 3 has what was actually built. Section 4.7 is still a plan and may change.
 
 ### 4.1 Stage 2: Ingestion (`src/ingest.py`) (built)
 
@@ -486,7 +552,9 @@ One commented `.sql` file per KPI, querying the `analytics` schema:
 
 Note: in Olist, `customer_id` is unique per order. Repeat buyers can only be found through `customer_unique_id`.
 
-### 4.6 Stage 7: Streamlit dashboard (`dashboard/`)
+### 4.6 Stage 7: Streamlit dashboard (`dashboard/`) (built)
+
+Built with 3 pages (Overview / Products & Sellers / Customers & Delivery) and two data modes; see section 3.2. **Deployment decision (made):** run locally now; in Stage 8, push to GitHub and deploy to Streamlit Cloud in snapshot mode. The original plan:
 
 - Multi-page app: **Overview KPIs**, **Sales trends**, **Products & categories**, **Delivery & reviews**.
 - Sidebar filters: date range, customer state, product category.
@@ -520,10 +588,13 @@ Problem statement, architecture diagram (Mermaid), tech stack, setup and run ins
 | 1 | Project sits in a OneDrive-synced folder; syncing `.venv/` may cause slowdowns or file locks | Monitor; move the project out of OneDrive if issues appear |
 | 2 | ~~Airflow in Docker must reach host Postgres~~ | ✅ **Resolved in Stage 5:** `host.docker.internal` works with the default `pg_hba.conf` |
 | 3 | ~~Airflow and dbt dependency conflicts in one Python environment~~ | ✅ **Resolved in Stage 5:** separate pipeline venv inside the image |
-| 4 | Dashboard deployment conflicts with the local-only rule | Decide before Stage 7 (see 4.6) |
+| 4 | ~~Dashboard deployment conflicts with the local-only rule~~ | ✅ **Decided in Stage 7:** push to GitHub and deploy in snapshot mode in Stage 8 |
 | 5 | ~~`if_exists="replace"` drops raw tables; dbt staging views would block it~~ | ✅ **Resolved in Stage 4:** staging is materialized as tables (see 3.2). Verified by re-running ingestion. |
 | 6 | ~~Known Olist quirks: missing delivery dates, products without a category, multiple reviews per order~~ | ✅ **Resolved in Stage 4:** handled in staging and `fct_orders` (see Stage 3 table in 3.2) |
 | 7 | Marts are only as fresh as the last `dbt run`; re-running ingestion alone doesn't update them | Expected for daily batch; the Airflow DAG always runs dbt after ingestion |
 | 8 | Laptop has 5.9 GB RAM (about 3 GB for Docker). The first image builds crashed Docker Desktop's storage under memory pressure | Lean compose (no Celery/Redis/triggerer); close other apps before `docker compose up`; stop Airflow when not needed (`docker compose down`) |
 | 9 | Health checks use the Airflow CLI, which is slow on this laptop. With a 10-second timeout, healthy services were reported unhealthy | Timeout raised to 60 seconds |
 | 10 | The DAG only runs while Docker Desktop is running | Acceptable for a local portfolio project; a cloud scheduler would be needed for a true daily run |
+| 11 | The snapshot is only as fresh as the last `export_snapshot.py` run; the Airflow DAG doesn't export it yet | Run the export after `dbt run`. Could be added as a 5th DAG task (needs an image rebuild, since the current image has no pyarrow) |
+| 12 | The root `requirements.txt` now includes Streamlit/Plotly, so the next Airflow image rebuild gets bigger | Fine for now; could split into `requirements-pipeline.txt` if the image size matters |
+| 13 | Dashboard insight captions are fixed text about the full dataset; they don't change with filters | Labelled "Insight (full dataset)"; the KPI cards and charts do respond to filters |
