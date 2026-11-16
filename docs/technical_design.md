@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | In progress (Stages 1–2 of 8 complete) |
+| **Status** | In progress (Stages 1–3 of 8 complete) |
 | **Last updated** | 2026-11-16 |
 | **Author** | Yokesh |
 
@@ -89,7 +89,7 @@ Keeping raw data untouched means a mistake in a transformation can always be fix
 
 ---
 
-## 3. What is built so far (Stages 1–2)
+## 3. What is built so far (Stages 1–3)
 
 ### 3.1 Repository layout
 
@@ -104,11 +104,12 @@ sales_analytics_pipeline/
 │   └── raw/              # Olist CSVs go here (git-ignored, .gitkeep tracked)
 ├── docs/
 │   └── technical_design.md
-├── logs/                 # ingestion.log (git-ignored, created on first run)
+├── logs/                 # ingestion.log, quality.log (git-ignored, created on first run)
 └── src/
     ├── db.py             # get_engine(): single place that builds the DB connection
     ├── check_connection.py  # smoke test: connects and prints the Postgres version
-    └── ingest.py         # loads every CSV into the raw schema
+    ├── ingest.py         # loads every CSV into the raw schema
+    └── quality_checks.py # data quality checks on the raw schema
 ```
 
 ### 3.2 Components
@@ -148,6 +149,22 @@ sales_analytics_pipeline/
 | `raw.sellers` | 3,095 |
 | `raw.product_category_name_translation` | 71 |
 
+**`src/quality_checks.py`: data quality (Stage 3)**
+- 50 checks. Each one is a SQL query that counts the rows breaking one rule. 0 rows means PASS; otherwise the check gets its severity, **FAIL** (broken keys) or **WARN** (smaller issues).
+- Check types: row count > 0, primary key not-null and unique, foreign keys resolve (orphan count), nulls in important columns, text that converts cleanly to timestamp or numeric (`pg_input_is_valid`, PostgreSQL 16+), value ranges (prices ≥ 0, review score 1–5, known order statuses), and date logic.
+- If a check's query errors (for example a missing table), that check is marked FAIL rather than crashing the whole run.
+- Results are appended to `quality.check_results` with a `run_at` timestamp, so the history of every run is kept. They're also logged to `logs/quality.log` and printed as a summary table.
+- Exit code 1 if any check FAILs, so Airflow will stop the pipeline. Tested with an injected failing check.
+
+**Quality results (run 2026-11-16): 46 PASS, 4 WARN, 0 FAIL**
+
+| Check | Table | Status | Rows | What it means | Handling |
+|---|---|---|---:|---|---|
+| `unique(review_id)` | order_reviews | WARN | 814 extra rows (789 review IDs) | Each duplicated `review_id` is attached to *different* orders: one review covering several orders. 547 orders also have more than one review. | **Stage 4:** the review key is `(review_id, order_id)`. For the fact table, keep one review per order (the latest). |
+| `not_null(product_category_name)` | products | WARN | 610 (1.85%) | These products also have no name or description lengths: missing catalog data. They appear in 1,603 order items. | **Stage 4:** label as `unknown` so their revenue is kept in totals. |
+| `fk(product_category_name -> translation)` | products | WARN | 13 | Two categories have no English translation: `pc_gamer` (3) and `portateis_cozinha_e_preparadores_de_alimentos` (10). | **Stage 4:** fall back to the Portuguese name (or a manual translation) in staging. |
+| `delivered orders have delivery date` | orders | WARN | 8 | Status is `delivered` but the customer delivery date is missing; 7 of the 8 do have a carrier date. | **Document only:** exclude these from delivery-time KPIs. Keep them in revenue. |
+
 ### 3.3 Current state
 
 | Item | Status |
@@ -160,7 +177,10 @@ sales_analytics_pipeline/
 | Ingestion loads all 9 tables; counts match CSVs | ✅ Done |
 | Re-run gives identical counts (idempotent) | ✅ Verified |
 | A failing file is logged and skipped; run exits with code 1 | ✅ Verified (test with an empty CSV) |
-| Stage 3: data quality checks | ⏳ Next |
+| Quality checks run: 50 checks, 46 PASS / 4 WARN / 0 FAIL | ✅ Done |
+| Results saved to `quality.check_results` and `logs/quality.log` | ✅ Verified |
+| Any FAIL makes the script exit with code 1 | ✅ Verified (injected test check, removed afterwards) |
+| Stage 4: dbt staging models and star schema | ⏳ Next |
 
 ---
 
@@ -188,7 +208,7 @@ Checks run against the `raw` tables:
 | Unparseable dates | timestamp columns that can't be converted |
 | Illogical dates | delivered before purchased; approved before purchased |
 
-- Output: a short Markdown report (`reports/data_quality_report.md`) with each check, its row count and pass/warn status.
+- Output: results are stored in the table `quality.check_results` (one row per check per run), logged to `logs/quality.log`, and printed as a summary. *(Built; see section 3.2. This replaces the Markdown report file originally planned, because a table keeps history and can be queried or charted later.)*
 - Exit code: the script fails (non-zero) only on **critical** issues, such as duplicate primary keys, so Airflow can stop the pipeline. Known dataset quirks, such as missing delivery dates for cancelled orders, are reported as warnings.
 
 ### 4.3 Stage 4: Transformation (dbt-postgres)
