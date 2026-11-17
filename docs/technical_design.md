@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Stages 1–8 complete. Live dashboard link pending deployment. |
+| **Status** | Stages 1–8 complete. Dashboard live at https://yokesh-olist-sales-analytics.streamlit.app (snapshot mode). |
 | **Last updated** | 2026-11-16 |
 | **Author** | Yokesh |
 
@@ -506,7 +506,7 @@ Run it: `streamlit run dashboard/app.py` → http://localhost:8501. After each `
 | Pre-push safety: `.env`, raw CSVs, logs, `dbt/target`, `airflow/logs` not tracked; full-history secret scan clean | ✅ Verified |
 | Cloud simulation: fresh clone, no `.env`, `dashboard/requirements.txt` only → snapshot mode, all pages OK | ✅ Verified |
 | Pushed to GitHub (github.com/Yokesh0404/sales-analytics-pipeline) | ✅ Done (Stage 8 docs commit waiting for the author's OK) |
-| Streamlit Cloud deployment + live link in README | ⏳ Waiting for the author to deploy |
+| Streamlit Cloud deployment + live link in README | ✅ Live: https://yokesh-olist-sales-analytics.streamlit.app |
 
 ---
 

@@ -11,7 +11,7 @@
 ![pandas](https://img.shields.io/badge/pandas-2.2-150458?logo=pandas&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-### 🔗 Live dashboard: _link coming soon_
+### 🔗 Live dashboard: [https://yokesh-olist-sales-analytics.streamlit.app](https://yokesh-olist-sales-analytics.streamlit.app)
 
 ![Dashboard overview](docs/images/01_overview.png)
 
